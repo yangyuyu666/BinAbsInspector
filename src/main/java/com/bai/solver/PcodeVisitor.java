@@ -25,6 +25,8 @@ import ghidra.program.model.listing.Instruction;
 import ghidra.program.model.mem.MemoryBlock;
 import ghidra.program.model.pcode.PcodeOp;
 import ghidra.program.model.pcode.Varnode;
+import ghidra.program.model.symbol.Reference;
+import ghidra.program.model.symbol.RefType;
 import com.bai.checkers.IntegerOverflowUnderflow;
 import com.bai.checkers.MemoryCorruption;
 import java.math.BigInteger;
@@ -650,7 +652,134 @@ public class PcodeVisitor {
         isCBranch = true;
     }
 
+    private void collectExternalTailTarget(Address address, Set<Function> targets, boolean followImport) {
+        Function function = GlobalState.flatAPI.getFunctionAt(address);
+        if (function != null) {
+            if (function.isThunk()) function = function.getThunkedFunction(true);
+            if (function != null && function.isExternal()) targets.add(function);
+            return;
+        }
+        // IAT 槽保存 API 地址，沿槽上的外部引用解析真实函数。
+        if (followImport) {
+            for (Reference reference : GlobalState.currentProgram.getReferenceManager().getReferencesFrom(address)) {
+                if (reference.isExternalReference()) {
+                    collectExternalTailTarget(reference.getToAddress(), targets, false);
+                }
+            }
+        }
+    }
+
+    private boolean hasTailStack(AbsEnv environment) {
+        // 第一版限定 x64；32 位还需按调用约定处理被调函数清理参数的字节数。
+        if (!GlobalState.arch.isX86() || GlobalState.arch.getDefaultPointerSize() != 8) return false;
+        KSet stack = environment.get(ALoc.getSPALoc());
+        if (!stack.isNormal() || !stack.isSingleton()) return false;
+        AbsVal value = stack.iterator().next();
+        // x86 函数入口以当前局部区偏移 0 表示栈顶，尾跳转前必须恢复到这里。
+        return value.getRegion().equals(Local.getLocal(context.getFunction())) && value.getOffset() == 0;
+    }
+
+    private boolean tryHandleExternalTailCall(PcodeOp pcode, AbsEnv inOutEnv, AbsEnv tmpEnv) {
+        Address address = Utils.getAddress(pcode);
+        Instruction instruction = GlobalState.flatAPI.getInstructionAt(address);
+        if (instruction == null || !instruction.getFlowType().isJump()
+                || instruction.getFlowType().isConditional() || instruction.getFallThrough() != null) return false;
+
+        Set<Function> targets = new HashSet<>();
+        for (Address flow : instruction.getFlows()) {
+            // 保留函数内跳转和 switch 的原有处理。
+            if (context.getFunction().getBody().contains(flow)) return false;
+            collectExternalTailTarget(flow, targets, true);
+        }
+        for (Reference reference : instruction.getReferencesFrom()) {
+            if (reference.isExternalReference() || reference.getReferenceType().equals(RefType.INDIRECTION)
+                    || reference.getReferenceType().isFlow()) {
+                collectExternalTailTarget(reference.getToAddress(), targets, true);
+            }
+        }
+        Set<Function> importTargets = new HashSet<>();
+        if (pcode.getInput(0).isAddress()) {
+            collectExternalTailTarget(pcode.getInput(0).getAddress(), importTargets, true);
+        }
+        // 导入槽由加载器重定位，磁盘上的原始槽值不能覆盖已确认的导入引用。
+        KSet values = getKSet(pcode.getInput(0), inOutEnv, tmpEnv, pcode);
+        if (importTargets.isEmpty() && values.isNormal()) {
+            for (AbsVal value : values) {
+                if (!value.getRegion().isGlobal() || value.isBigVal()) return false;
+                Address target = GlobalState.flatAPI.toAddr(value.getValue());
+                Set<Function> resolved = new HashSet<>();
+                collectExternalTailTarget(target, resolved, true);
+                if (resolved.isEmpty()) return false;
+                targets.addAll(resolved);
+            }
+        }
+        if (targets.size() != 1) return false;
+        Function callee = targets.iterator().next();
+        if (!hasTailStack(inOutEnv)) {
+            Logging.debug("External tail rejected stack: " + callee.getName() + " @ " + address
+                    + " sp=" + inOutEnv.get(ALoc.getSPALoc()));
+            return false;
+        }
+        if (callee.hasNoReturn()) {
+            Logging.debug("External tail call does not return: " + callee.getName() + " @ " + address);
+            jumpOut = true;
+            return true;
+        }
+        ExternalFunctionBase model = FunctionModelManager.getExternalFunction(callee.getName());
+        boolean lockOnly = callee.getName().equals("EnterCriticalSection")
+                || callee.getName().equals("LeaveCriticalSection");
+        if (model == null && !lockOnly) {
+            // 未建模的 API 不冒充无副作用函数，保留原路径并明确记录缺失模型。
+            Logging.warn("Unmodeled external tail call: " + callee.getName() + " @ " + address);
+            return false;
+        }
+        if (context.getFunction().hasNoReturn()) return false;
+        if (model != null) {
+            defineExternalFunctionSignature(pcode, inOutEnv, tmpEnv, callee);
+            MemoryCorruption.checkExternalCallParameters(pcode, inOutEnv, tmpEnv, context, callee);
+            model.invoke(pcode, inOutEnv, tmpEnv, context, callee);
+        }
+        // 锁 API 仅概括正常返回，不跟踪锁状态；未知 API 不使用这项简化。
+        Logging.debug("External tail summary: " + callee.getName() + " @ " + address);
+        // 尾调用复用原返回地址，只弹出一次；不创建额外调用上下文。
+        ALoc stack = ALoc.getSPALoc();
+        inOutEnv.set(stack, inOutEnv.get(stack).add(new KSet(stack.getLen() * 8)
+                .insert(new AbsVal(GlobalState.arch.getDefaultPointerSize()))), true);
+        visit_RETURN(pcode, inOutEnv, tmpEnv);
+        jumpOut = true;
+        return true;
+    }
+
+    private boolean tryHandleInternalTailCall(PcodeOp pcode, AbsEnv inOutEnv, AbsEnv tmpEnv) {
+        Instruction instruction = GlobalState.flatAPI.getInstructionAt(Utils.getAddress(pcode));
+        if (instruction == null || !instruction.getFlowType().isJump()
+                || instruction.getFlowType().isConditional() || instruction.getFallThrough() != null
+                || !hasTailStack(inOutEnv)) return false;
+        KSet targets = getKSet(pcode.getInput(0), inOutEnv, tmpEnv, pcode);
+        if (!targets.isNormal() || !targets.isSingleton()) return false;
+        AbsVal value = targets.iterator().next();
+        if (!value.getRegion().isGlobal() || value.isBigVal()) return false;
+        Address target = GlobalState.flatAPI.toAddr(value.getValue());
+        if (context.getFunction().getBody().contains(target)) return false;
+        Function callee = GlobalState.flatAPI.getFunctionAt(target);
+        if (callee == null || callee.isExternal()) return false;
+        if (callee.isThunk()) callee = callee.getThunkedFunction(true);
+        if (callee == null || callee.isExternal()) return false;
+
+        // 复用函数求解与返回通知，但尾跳转不再压入一个物理返回地址。
+        PcodeOp call = new PcodeOp(pcode.getSeqnum(), PcodeOp.CALLIND,
+                new Varnode[]{pcode.getInput(0)}, null);
+        visit_CALLIND(call, inOutEnv, tmpEnv);
+        if (switchContext || jumpOut) return true;
+        // 真实目标已消费返回地址，包装函数只传播结果，不再次弹栈。
+        visit_RETURN(pcode, inOutEnv, tmpEnv);
+        jumpOut = true;
+        return true;
+    }
+
     public void visit_BRANCHIND(PcodeOp pcode, AbsEnv inOutEnv, AbsEnv tmpEnv) {
+        if (tryHandleExternalTailCall(pcode, inOutEnv, tmpEnv)) return;
+        if (tryHandleInternalTailCall(pcode, inOutEnv, tmpEnv)) return;
         Varnode offset = pcode.getInput(0);
         KSet offsetKSet = getKSet(offset, inOutEnv, tmpEnv, pcode);
         if (offsetKSet.isTop()) {
@@ -660,10 +789,11 @@ public class PcodeVisitor {
         Address currentAddress = Utils.getAddress(pcode);
         for (AbsVal offsetVal : offsetKSet) {
             if (offsetVal.getRegion().isGlobal() && !offsetVal.isBigVal()) {
-                Address targetAddress = currentAddress.getNewAddress(currentAddress.getOffset() + offsetVal.getValue());
+                // BRANCHIND 的值是绝对地址，不能再叠加当前指令地址。
+                Address targetAddress = currentAddress.getNewAddress(offsetVal.getValue());
                 MemoryBlock block = GlobalState.flatAPI.getMemoryBlock(targetAddress);
-                if (block != null && block.isExecute()) {
-                    cfg.addEdge(currentAddress, targetAddress);
+                if (block != null && block.isExecute() && context.getFunction().getBody().contains(targetAddress)) {
+                    cfg.addResolvedBranchEdge(currentAddress, targetAddress);
                 }
             }
         }
@@ -679,7 +809,7 @@ public class PcodeVisitor {
             callee = callee.getThunkedFunction(true);
         }
 
-        if (callee.isExternal() || FunctionModelManager.isFunctionAddressMapped(targetAddress)) {
+        if (FunctionModelManager.shouldUseExternalModel(callee, targetAddress)) {
             defineExternalFunctionSignature(pcode, inOutEnv, tmpEnv, callee);
             MemoryCorruption.checkExternalCallParameters(pcode, inOutEnv, tmpEnv, context, callee);
             Status status = invokeExternal(pcode, inOutEnv, tmpEnv, callee);
@@ -802,7 +932,7 @@ public class PcodeVisitor {
             Function callee = pair.getLeft();
             Address targetAddress = pair.getRight();
             Status status;
-            if (callee.isExternal() || FunctionModelManager.isFunctionAddressMapped(targetAddress)) {
+            if (FunctionModelManager.shouldUseExternalModel(callee, targetAddress)) {
                 defineExternalFunctionSignature(pcode, inOutEnv, tmpEnv, callee);
                 // CWE119, CWE416, CWE416, CWE476
                 MemoryCorruption.checkExternalCallParameters(pcode, inOutEnv, tmpEnv, context, callee);

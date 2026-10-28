@@ -1,5 +1,7 @@
 # What is  BinAbsInspector?
 
+Fork changes: [first modification record (2026-10-28)](doc/first-modification-2026-10-28.md) documents the tail-call, static-library-model and memcpy fixes, regression results, and known limitations.
+
 BinAbsInspector (Binary Abstract Inspector) is a static analyzer for automated reverse engineering and scanning vulnerabilities in binaries, which is a long-term research project incubated at [Keenlab](https://keenlab.tencent.com/). It is based on abstract interpretation with the support from Ghidra. It works on Ghidra's Pcode instead of assembly. Currently it supports binaries on x86,x64, armv7 and aarch64. 
 
 # Installation

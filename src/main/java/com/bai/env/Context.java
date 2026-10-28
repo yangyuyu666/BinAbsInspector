@@ -299,7 +299,7 @@ public class Context {
      */
     public void loop() {
         PcodeVisitor visitor = new PcodeVisitor(this);
-        while (!worklist.isEmpty()) {
+        while (!worklist.isEmpty() && !Thread.currentThread().isInterrupted()) {
             Address addr = worklist.pop();
             if (visitor.visit(addr)) {
                 return;
@@ -459,7 +459,7 @@ public class Context {
      */    
     public static void mainLoop(Context entryCtx) {
         current = entryCtx;
-        while (current != null) {
+        while (current != null && !Thread.currentThread().isInterrupted()) {
             current.loop();
             current = popContext();
             if (current != null) {
@@ -485,7 +485,16 @@ public class Context {
             Logging.error("Timeout at " + java.time.LocalTime.now() + ". Analysis terminated...");
             future.cancel(true);
         }
-        executor.shutdown();
+        executor.shutdownNow();
+        try {
+            // 等待工作线程退出后再导出状态，避免超时后仍并发改写分析结果。
+            if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
+                throw new IllegalStateException("Analysis worker did not stop after cancellation");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted while stopping analysis worker", e);
+        }
     }
 
 }

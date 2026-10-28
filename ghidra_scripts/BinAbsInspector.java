@@ -155,6 +155,14 @@ public class BinAbsInspector extends GhidraScript {
         }
         Logging.info("Running checkers");
         CheckerManager.runCheckers(GlobalState.config);
+        // 汇总没有返回状态的调用，提示用户核查未覆盖的路径。
+        long missingExits = com.bai.env.Context.getPool().values().stream()
+                .filter(ctx -> !ctx.getFunction().hasNoReturn() && ctx.getExitValue().isEmpty())
+                .count();
+        if (missingExits > 0) {
+            Logging.warn("Coverage note: " + missingExits
+                    + " contexts have no observed return state. Check unsupported flows or intentional non-return paths; completion does not imply full coverage.");
+        }
         guiProcessResult();
         GlobalState.reset();
     }

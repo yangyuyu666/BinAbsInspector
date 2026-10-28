@@ -5,6 +5,7 @@ import com.bai.env.funcs.externalfuncs.CallocFunction;
 import com.bai.env.funcs.externalfuncs.ExternalFunctionBase;
 import com.bai.env.funcs.externalfuncs.FgetcFunction;
 import com.bai.env.funcs.externalfuncs.FgetsFunction;
+import com.bai.env.funcs.externalfuncs.FputsFunction;
 import com.bai.env.funcs.externalfuncs.FprintfFunction;
 import com.bai.env.funcs.externalfuncs.FreeFunction;
 import com.bai.env.funcs.externalfuncs.FscanfFunction;
@@ -36,6 +37,7 @@ import com.bai.env.funcs.stdfuncs.ListModel;
 import com.bai.env.funcs.stdfuncs.MapModel;
 import com.bai.env.funcs.stdfuncs.VectorModel;
 import com.bai.util.Logging;
+import com.bai.util.GlobalState;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.symbol.Namespace;
@@ -86,7 +88,8 @@ public class FunctionModelManager {
             // stdlib
             new MemcpyFunction(),
             new AtoiFunction(),
-            new PutsFunction()
+            new PutsFunction(),
+            new FputsFunction()
     );
 
     private static List<String> stdNameSpaceStringList = List.of("std");
@@ -169,6 +172,20 @@ public class FunctionModelManager {
      */
     public static boolean isFunctionAddressMapped(Address entryAddress) {
         return address2SymbolConfigMap.containsKey(entryAddress);
+    }
+
+    public static boolean shouldUseExternalModel(Function callee, Address targetAddress) {
+        if (callee == null) {
+            return false;
+        }
+        if (callee.isExternal() || isFunctionAddressMapped(targetAddress)
+                || isFunctionAddressMapped(callee.getEntryPoint())) {
+            return true;
+        }
+        // 开启选项后，将全局函数的精确名称匹配到已有标准库模型。
+        return GlobalState.config.isModelStaticLibs()
+                && callee.getParentNamespace().isGlobal()
+                && getExternalFunction(callee.getName()) != null;
     }
 
     /**

@@ -52,6 +52,7 @@ public class Config {
             System.out.println("        [-timeout <timeout>]");
             System.out.println("        [-entry <address>]");
             System.out.println("        [-externalMap <file>]");
+            System.out.println("        [-modelStaticLibs]");
             System.out.println("        [-json]");
             System.out.println("        [-disableZ3]");
             System.out.println("        [-all]");
@@ -90,6 +91,8 @@ public class Config {
                         config.setOutputJson(true);
                     } else if (arg.equalsIgnoreCase("-disableZ3")) {
                         config.setEnableZ3(false);
+                    } else if (arg.equalsIgnoreCase("-modelStaticLibs")) {
+                        config.setModelStaticLibs(true);
                     } else if (arg.equalsIgnoreCase("-all")) {
                         CheckerManager.loadAllCheckers(config);
                     } else if (arg.equalsIgnoreCase("-debug")) {
@@ -146,6 +149,8 @@ public class Config {
     private boolean isGUI;
 
     private boolean preserveCalleeSavedReg;
+
+    private boolean modelStaticLibs;
 
     // for tactic tuning, see:
     // http://www.cs.tau.ac.il/~msagiv/courses/asv/z3py/strategies-examples.htm
@@ -372,6 +377,14 @@ public class Config {
         return preserveCalleeSavedReg;
     }
 
+    public boolean isModelStaticLibs() {
+        return modelStaticLibs;
+    }
+
+    public void setModelStaticLibs(boolean enabled) {
+        modelStaticLibs = enabled;
+    }
+
     @Override
     public String toString() {
         return "Config{"
@@ -386,6 +399,7 @@ public class Config {
                 + ", isEnableZ3=" + isEnableZ3
                 + ", z3Tactics=" + z3Tactics
                 + ", externalMapPath=" + externalMapPath
+                + ", modelStaticLibs=" + modelStaticLibs
                 + '}';
     }
 }

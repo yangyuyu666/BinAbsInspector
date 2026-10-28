@@ -35,6 +35,7 @@ public class ConfigDialog extends JDialog {
     private JTextField timeoutTextField;
     private JCheckBox debugCheckBox;
     private JCheckBox enableZ3CheckBox;
+    private JCheckBox modelStaticLibsCheckBox;
     private JLabel warningLabel;
     private JList<String> checkerList;
     private JCheckBox runAllCheckersCheckBox;
@@ -104,6 +105,7 @@ public class ConfigDialog extends JDialog {
         timeoutTextField.setText(Integer.toString(config.getTimeout()));
         debugCheckBox.setSelected(config.isDebug());
         enableZ3CheckBox.setSelected(config.isEnableZ3());
+        modelStaticLibsCheckBox.setSelected(config.isModelStaticLibs());
         runAllCheckersCheckBox.setSelected(true);
         CheckerManager.loadAllCheckers(config);
         checkerList.setListData(CheckerManager.getCheckerNames());
@@ -134,6 +136,7 @@ public class ConfigDialog extends JDialog {
             }
             config.setDebug(debugCheckBox.isSelected());
             config.setEnableZ3(enableZ3CheckBox.isSelected());
+            config.setModelStaticLibs(modelStaticLibsCheckBox.isSelected());
             for (Object checker : checkerList.getSelectedValuesList()) {
                 config.addChecker((String) checker);
             }
@@ -257,7 +260,7 @@ public class ConfigDialog extends JDialog {
                         GridConstraints.SIZEPOLICY_WANT_GROW, GridConstraints.SIZEPOLICY_FIXED, null,
                         new Dimension(150, -1), null, 0, false));
         final JPanel panel4 = new JPanel();
-        panel4.setLayout(new GridLayoutManager(1, 2, new Insets(0, 0, 0, 0), -1, -1));
+        panel4.setLayout(new GridLayoutManager(2, 2, new Insets(0, 0, 0, 0), -1, -1));
         contentPane.add(panel4,
                 new GridConstraints(1, 0, 1, 1, GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH,
                         GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
@@ -273,6 +276,12 @@ public class ConfigDialog extends JDialog {
         enableZ3CheckBox.setText("Enable Z3");
         panel4.add(enableZ3CheckBox,
                 new GridConstraints(0, 1, 1, 1, GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
+                        GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                        GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
+        modelStaticLibsCheckBox = new JCheckBox("Model static library functions by name");
+        modelStaticLibsCheckBox.setToolTipText("Use only when global library function names are trusted.");
+        panel4.add(modelStaticLibsCheckBox,
+                new GridConstraints(1, 0, 1, 2, GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
                         GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
                         GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
         warningLabel = new JLabel();

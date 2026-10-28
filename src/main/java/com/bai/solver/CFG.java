@@ -171,6 +171,26 @@ public class CFG extends GraphBase<Address> {
         return flowTargets.toArray(Address[]::new);
     }
 
+    public void addResolvedBranchEdge(Address source, Address target) {
+        boolean unseen = !nodeToIdMap.containsKey(target);
+        addEdge(source, target);
+        if (!unseen) return;
+        LinkedList<Address> pending = new LinkedList<>();
+        Set<Address> visited = new HashSet<>();
+        pending.add(target);
+        // 动态发现跳转目标后，把目标块后面的指令也加入控制流图。
+        while (!pending.isEmpty()) {
+            Address current = pending.remove();
+            if (!visited.add(current)) continue;
+            for (Address successor : getFlowTargets(current)) {
+                if (successor == null || !f.getBody().contains(successor)) continue;
+                boolean fresh = !nodeToIdMap.containsKey(successor);
+                addEdge(current, successor);
+                if (fresh) pending.add(successor);
+            }
+        }
+    }
+
     /**
      * Re-compute the Weak Topological Ordering (WTO) if the graph has changed.
      */
